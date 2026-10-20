@@ -1,5 +1,8 @@
 # Physical-device validation (manual)
 
+> The localization and accuracy checklist (sections A–H, with logging against tape-measured
+> reference points) is in [ACCURACY_AUDIT.md](ACCURACY_AUDIT.md). This file covers functional checks.
+
 Automated tests cover the logic; these checks can only be done on a real device with the printed
 marker. Record device model, ARCore version, lighting and results for each run.
 

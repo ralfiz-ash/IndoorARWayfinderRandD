@@ -16,8 +16,11 @@ data class NavigationPolicy(
     val arrivalRadiusMeters: Double = 1.0,
     /** Remaining *route* distance must also be within radius + slack (prevents "arriving" through a wall). */
     val arrivalRouteSlackMeters: Double = 1.0,
-    /** Arrival requires the localization error estimate to be at most this. */
-    val maxArrivalErrorMeters: Double = 0.75,
+    /**
+     * Arrival requires the localization error estimate to be at most this. Must not exceed the
+     * arrival radius, otherwise "arrived" could be reported up to radius + error away.
+     */
+    val maxArrivalErrorMeters: Double = 0.5,
     /** Arrival conditions must hold continuously for this long. */
     val arrivalDwellNanos: Long = 1_000_000_000L,
     /** User is off route when lateral offset > base + current localization error … */
@@ -28,7 +31,14 @@ data class NavigationPolicy(
     val replanIntervalNanos: Long = 2_000_000_000L,
     val routing: RoutingPolicy = RoutingPolicy(),
     val progress: ProgressPolicy = ProgressPolicy(),
-)
+) {
+    init {
+        require(arrivalRadiusMeters > 0) { "arrivalRadiusMeters must be positive" }
+        require(maxArrivalErrorMeters in 0.0..arrivalRadiusMeters) {
+            "maxArrivalErrorMeters ($maxArrivalErrorMeters) must be within 0..arrivalRadiusMeters ($arrivalRadiusMeters)"
+        }
+    }
+}
 
 sealed interface NavigationFailure {
     data object StaleDestination : NavigationFailure

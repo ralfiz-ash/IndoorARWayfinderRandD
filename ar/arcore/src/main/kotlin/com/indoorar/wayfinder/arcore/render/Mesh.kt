@@ -80,4 +80,53 @@ object MeshFactory {
         quad(p(x1, y0, z1), p(x1, y0, z0), p(x1, y1, z0), p(x1, y1, z1)) // +x
         quad(p(x0, y0, z0), p(x0, y0, z1), p(x0, y1, z1), p(x0, y1, z0)) // -x
     }.build()
+
+    /**
+     * Extrudes convex polygons given in the XZ plane (counter-clockwise seen from +Y) to [thickness],
+     * centred on y = 0. Used for arrows and chevrons.
+     */
+    fun extrude(polygons: List<List<Pair<Float, Float>>>, thickness: Float): Mesh = Builder().apply {
+        val h = thickness / 2
+        for (poly in polygons) {
+            val top = poly.map { (x, z) -> p(x, h, z) }
+            val bottom = poly.map { (x, z) -> p(x, -h, z) }
+            for (i in 1 until poly.size - 1) {
+                tri(top[0], top[i + 1], top[i], p(0f, 1f, 0f))
+                tri(bottom[0], bottom[i], bottom[i + 1], p(0f, -1f, 0f))
+            }
+            for (i in poly.indices) {
+                val j = (i + 1) % poly.size
+                quad(bottom[i], bottom[j], top[j], top[i])
+            }
+        }
+    }.build()
+
+    /** Solid arrow pointing +Z, tip at z = +0.3 m. */
+    fun arrow(): Mesh = extrude(
+        listOf(
+            listOf(-0.06f to -0.3f, 0.06f to -0.3f, 0.06f to 0.02f, -0.06f to 0.02f),
+            listOf(-0.17f to 0.02f, 0.17f to 0.02f, 0f to 0.3f),
+        ),
+        thickness = 0.05f,
+    )
+
+    /** Flat "V" chevron pointing +Z, for the floor trail. */
+    fun chevron(): Mesh = extrude(
+        listOf(
+            listOf(-0.2f to -0.1f, -0.13f to -0.1f, 0.035f to 0.1f, 0f to 0.15f),
+            listOf(0.13f to -0.1f, 0.2f to -0.1f, 0f to 0.15f, -0.035f to 0.1f),
+        ),
+        thickness = 0.01f,
+    )
+
+    /** Open vertical cylinder from y = 0 to [height]. */
+    fun cylinder(radius: Float, height: Float, segments: Int = 32): Mesh = Builder().apply {
+        for (i in 0 until segments) {
+            val a0 = (2 * PI * i / segments).toFloat()
+            val a1 = (2 * PI * (i + 1) / segments).toFloat()
+            val b0 = p(radius * cos(a0), 0f, radius * sin(a0)); val b1 = p(radius * cos(a1), 0f, radius * sin(a1))
+            val t0 = p(radius * cos(a0), height, radius * sin(a0)); val t1 = p(radius * cos(a1), height, radius * sin(a1))
+            quad(b0, t0, t1, b1)
+        }
+    }.build()
 }

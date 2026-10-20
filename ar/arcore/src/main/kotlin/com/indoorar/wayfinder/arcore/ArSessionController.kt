@@ -28,6 +28,7 @@ import com.indoorar.wayfinder.arcore.render.MeshRenderer
 import com.indoorar.wayfinder.arcore.render.toModelMatrix
 import com.indoorar.wayfinder.domain.geometry.RigidTransform
 import com.indoorar.wayfinder.domain.localization.CameraTracking
+import com.indoorar.wayfinder.domain.localization.LocalizationDiagnostics
 import com.indoorar.wayfinder.domain.localization.LocalizationPolicy
 import com.indoorar.wayfinder.domain.localization.LocalizationStatus
 import com.indoorar.wayfinder.domain.localization.LocalizationTracker
@@ -58,6 +59,7 @@ data class ArFrameSnapshot(
     val localization: LocalizationStatus = LocalizationStatus.NotLocalized(NotLocalizedReason.SCAN_MARKER),
     val floorPlaneDetected: Boolean = false,
     val depthEnabled: Boolean = false,
+    val diagnostics: LocalizationDiagnostics = LocalizationDiagnostics(),
 )
 
 /**
@@ -258,6 +260,7 @@ class ArSessionController(
             session, frame, localization,
             cameraPose = if (tracking) camera.displayOrientedPose.toRigidTransform() else null,
             viewportWidth, viewportHeight,
+            tracker.diagnostics,
         )
         layers.forEach { it.onFrame(context) }
 
@@ -280,8 +283,42 @@ class ArSessionController(
                         it.type == Plane.Type.HORIZONTAL_UPWARD_FACING
                 },
                 depthEnabled = depthEnabled,
+                diagnostics = tracker.diagnostics,
             )
         }
+        if (now - lastLogMs >= LOG_INTERVAL_MS) {
+            lastLogMs = now
+            logDiagnostics(cameraTracking, localization, if (tracking) camera.pose.translationVec() else null)
+        }
+    }
+
+    private var lastLogMs = 0L
+
+    /**
+     * One line per second under tag [DIAG_TAG] for walk-through audits:
+     * `adb logcat -s IndoorAR-Loc`. Camera position is converted to the venue frame when localized.
+     */
+    private fun logDiagnostics(camera: CameraTracking, localization: LocalizationStatus, cameraPosition: com.indoorar.wayfinder.domain.geometry.Vec3?) {
+        val d = tracker.diagnostics
+        val venuePos = (localization as? LocalizationStatus.Localized)?.let { l -> cameraPosition?.let(l.alignment::toVenue) }
+        Log.i(
+            DIAG_TAG,
+            String.format(
+                java.util.Locale.US,
+                "cam=%s loc=%s err=%s venue=%s marker=%s dist=%s angle=%s reject=%s stable=%d/%d " +
+                    "fix=%.2f lever=%.2f drift=%.2f pen=%.2f walked=%.1f sinceFix=%s pending=%s corr=%s(%d) mapCorr=%d intr=%d",
+                camera.javaClass.simpleName, localization.javaClass.simpleName,
+                (localization as? LocalizationStatus.Localized)?.let { "%.2f".format(java.util.Locale.US, it.estimatedErrorMeters) } ?: "-",
+                venuePos?.let { "(%.2f,%.2f)".format(java.util.Locale.US, it.x, it.z) } ?: "-",
+                d.markerQuality ?: "-", d.distanceToMarkerMeters?.let { "%.2f".format(java.util.Locale.US, it) } ?: "-",
+                d.viewingAngleDegrees?.let { "%.0f".format(java.util.Locale.US, it) } ?: "-", d.fixRejection ?: "-",
+                d.stableFrames, d.requiredStableFrames, d.errorFix, d.errorHeadingLever, d.errorDrift, d.errorPenalties,
+                d.walkedSinceFixMeters, d.secondsSinceFix?.let { "%.0fs".format(java.util.Locale.US, it) } ?: "-",
+                d.pendingDisagreementMeters?.let { "%.2f".format(java.util.Locale.US, it) } ?: "-",
+                d.lastCorrectionMeters?.let { "%.2fm/%.1f°".format(java.util.Locale.US, it, d.lastCorrectionDegrees ?: 0.0) } ?: "-",
+                d.frameCorrections, d.mapCorrections, d.interruptions,
+            ),
+        )
     }
 
     /** Visual confirmation of localization: marker outline plus venue axes (X red, Y green, Z blue). */
@@ -303,5 +340,7 @@ class ArSessionController(
     companion object {
         private const val TAG = "ArSessionController"
         const val PUBLISH_INTERVAL_MS = 100L
+        const val LOG_INTERVAL_MS = 1_000L
+        const val DIAG_TAG = "IndoorAR-Loc"
     }
 }

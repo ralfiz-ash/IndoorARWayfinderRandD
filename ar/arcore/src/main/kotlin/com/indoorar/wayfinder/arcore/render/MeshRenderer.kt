@@ -30,6 +30,20 @@ class MeshRenderer {
         Matrix.multiplyMM(vp, 0, projection, 0, view, 0)
     }
 
+    private val clip = FloatArray(4)
+
+    /**
+     * Projects a session-space point to viewport pixels using the current view-projection.
+     * Returns null if the point is behind the camera.
+     */
+    fun project(x: Float, y: Float, z: Float, width: Int, height: Int): FloatArray? {
+        Matrix.multiplyMV(clip, 0, vp, 0, floatArrayOf(x, y, z, 1f), 0)
+        if (clip[3] <= 1e-4f) return null
+        val nx = clip[0] / clip[3]
+        val ny = clip[1] / clip[3]
+        return floatArrayOf((nx + 1f) / 2f * width, (1f - ny) / 2f * height)
+    }
+
     /** @param color RGBA, 0..1. Alpha < 1 is blended. */
     fun draw(mesh: Mesh, model: FloatArray, color: FloatArray) {
         val buffer = buffers.getOrPut(mesh) { GlUtil.floatBuffer(mesh.vertexData) }

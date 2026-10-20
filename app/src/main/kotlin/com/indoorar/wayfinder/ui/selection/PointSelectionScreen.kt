@@ -19,6 +19,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -41,7 +45,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.indoorar.wayfinder.AppContainer
+import com.indoorar.wayfinder.domain.accuracy.AccuracyCheckKind
 import com.indoorar.wayfinder.domain.selection.HitSource
+import com.indoorar.wayfinder.ui.diagnostics.DiagnosticsPanel
 import com.indoorar.wayfinder.ui.StatusLevel
 import com.indoorar.wayfinder.ui.UiText
 import com.indoorar.wayfinder.ui.ar.ArCameraView
@@ -79,7 +85,17 @@ fun PointSelectionScreen(container: AppContainer, onClose: () -> Unit, onSaved: 
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     LocalizationChip(UiText.localization(state.snapshot.localization), Modifier.weight(1f))
+                    TextButton(onClick = vm::toggleDiagnostics) { Text("Diag", color = Color.White) }
                     TextButton(onClick = onClose) { Text("Cancel", color = Color.White) }
+                }
+                if (state.showDiagnostics) DiagnosticsPanel(state.snapshot.localization, state.snapshot.diagnostics)
+                state.accuracyResult?.let {
+                    Surface(shape = RoundedCornerShape(12.dp), color = Color(0xFF10223F).copy(alpha = 0.9f), modifier = Modifier.fillMaxWidth()) {
+                        Row(Modifier.padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(it, color = Color.White, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = vm::dismissAccuracyResult) { Text("OK", color = Color.White) }
+                        }
+                    }
                 }
                 Banner(
                     UiText.selectionInstruction(
@@ -108,9 +124,32 @@ fun PointSelectionScreen(container: AppContainer, onClose: () -> Unit, onSaved: 
                     onNameChange = vm::onNameChange,
                     onSave = vm::save,
                     onRetry = vm::retry,
+                    onAccuracyCheck = vm::openAccuracyCheck,
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
             }
+        }
+
+        state.accuracyTargets?.let { targets ->
+            AlertDialog(
+                onDismissRequest = vm::cancelAccuracyCheck,
+                title = { Text("Which known point did you tap?") },
+                text = {
+                    if (targets.isEmpty()) {
+                        Text("No saved destinations or reference points. Save a destination at a taped floor mark first, or add tape-measured points to assets/reference_points.json.")
+                    } else {
+                        LazyColumn {
+                            items(targets) { t ->
+                                Text(
+                                    "${t.name}  (${if (t.kind == AccuracyCheckKind.ABSOLUTE) "tape-measured" else "saved destination"})",
+                                    modifier = Modifier.fillMaxWidth().clickable { vm.logAccuracy(t) }.padding(vertical = 10.dp),
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = vm::cancelAccuracyCheck) { Text("Cancel") } },
+            )
         }
     }
 }
@@ -159,6 +198,7 @@ private fun SaveSheet(
     onNameChange: (String) -> Unit,
     onSave: () -> Unit,
     onRetry: () -> Unit,
+    onAccuracyCheck: () -> Unit,
     modifier: Modifier,
 ) {
     Surface(
@@ -191,6 +231,7 @@ private fun SaveSheet(
             )
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(onClick = onRetry, modifier = Modifier.weight(1f)) { Text("Retry") }
+                OutlinedButton(onClick = onAccuracyCheck, enabled = state.canSave, modifier = Modifier.weight(1f)) { Text("Check") }
                 Button(onClick = onSave, enabled = state.canSave, modifier = Modifier.weight(1f)) {
                     Text(if (state.saving) "Saving…" else "Save")
                 }

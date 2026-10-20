@@ -7,6 +7,7 @@ import com.indoorar.wayfinder.arcore.render.MeshRenderer
 import com.indoorar.wayfinder.arcore.render.translationMatrix
 import com.indoorar.wayfinder.domain.geometry.Vec3
 import com.indoorar.wayfinder.domain.geometry.yawOf
+import com.indoorar.wayfinder.domain.localization.LocalizationDiagnostics
 import com.indoorar.wayfinder.domain.localization.LocalizationStatus
 import com.indoorar.wayfinder.domain.selection.HitRejection
 import com.indoorar.wayfinder.domain.selection.HitSource
@@ -35,6 +36,9 @@ data class SelectedPoint(
      * conversion at save time uses a consistent pair.
      */
     val localization: LocalizationStatus,
+    /** Camera position (session) and localization diagnostics from the same frame, for accuracy logging. */
+    val cameraPositionInSession: Vec3? = null,
+    val diagnostics: LocalizationDiagnostics? = null,
 )
 
 sealed interface TapResult {
@@ -97,6 +101,8 @@ class PointSelectionLayer(private val validator: HitValidator = HitValidator()) 
                 positionInSession = if (tracking) a.pose.translationVec() else meta.positionInSession,
                 anchorTracking = tracking,
                 localization = context.localization,
+                cameraPositionInSession = context.cameraPose?.translation ?: meta.cameraPositionInSession,
+                diagnostics = context.diagnostics,
             )
             anchorMeta = updated
             if (updated != _selected.value) _selected.value = updated
@@ -125,6 +131,8 @@ class PointSelectionLayer(private val validator: HitValidator = HitValidator()) 
                     headingInSession = if (forward.length > 1e-3) yawOf(forward) else null,
                     anchorTracking = true,
                     localization = context.localization,
+                    cameraPositionInSession = cameraPose.translation,
+                    diagnostics = context.diagnostics,
                 )
                 anchorMeta = point
                 _selected.value = point

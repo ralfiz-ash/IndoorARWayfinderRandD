@@ -14,6 +14,13 @@ native iOS (Swift, ARKit, RealityKit) implementation can mirror the same contrac
 Tapping a destination on the home screen currently shows "not implemented yet" instead of
 pretending to navigate.
 
+## Accuracy
+
+The app has **no measured accuracy yet**. The ± values it shows are model estimates. See
+[docs/ACCURACY_AUDIT.md](docs/ACCURACY_AUDIT.md) for the error model, audit findings, the
+single-marker limitation with a proposed multi-marker improvement, and the measurement checklist.
+Diagnostics: the **Diag** button in AR screens, `adb logcat -s IndoorAR-Loc`, and the Venue → Accuracy log screen.
+
 ## Prerequisites
 
 - JDK 21 (Gradle daemon pinned via `gradle/gradle-daemon-jvm.properties`)

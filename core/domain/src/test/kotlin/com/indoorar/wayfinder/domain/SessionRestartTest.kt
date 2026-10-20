@@ -51,7 +51,11 @@ class SessionRestartTest {
         fun fromRoom(t: RigidTransform) = sessionFromRoom compose t
     }
 
+    /** Feeds 10 frames (a stable fix needs several) and returns the last status. */
     private fun fix(tracker: LocalizationTracker, s: Session, t: Long, quality: MarkerTrackingQuality = MarkerTrackingQuality.FULL) =
+        (0 until 10).map { frame(tracker, s, t * 1_000 + it, quality) }.last()
+
+    private fun frame(tracker: LocalizationTracker, s: Session, t: Long, quality: MarkerTrackingQuality) =
         tracker.update(
             TrackingInput(
                 timestampNanos = t,

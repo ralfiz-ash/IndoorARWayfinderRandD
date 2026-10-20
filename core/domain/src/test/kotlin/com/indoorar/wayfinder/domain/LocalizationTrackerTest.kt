@@ -19,12 +19,18 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.indoorar.wayfinder.domain.localization.LocalizationPolicy
 import kotlin.math.PI
+
+/** Single-frame fixes and no heading term: isolates the behaviours these tests were written for. */
+object LegacyPolicy {
+    val policy = LocalizationPolicy(minStableFixFrames = 1, baseYawSigmaRadians = 0.0)
+}
 
 class LocalizationTrackerTest {
     private val spec = MarkerSpec("venue_marker", 0.2, MarkerMounting.WALL)
     private val markerPose = RigidTransform(Vec3(0.0, 1.5, -2.0), Quaternion.fromAxisAngle(Vec3.UNIT_X, PI / 2))
-    private val tracker = LocalizationTracker(spec)
+    private val tracker = LocalizationTracker(spec, LegacyPolicy.policy)
     private var t = 0L
 
     private fun frame(
@@ -159,7 +165,7 @@ class LocalizationTrackerTest {
 class LocalizationTrackerPauseTest {
     private val spec = MarkerSpec("venue_marker", 0.2, MarkerMounting.WALL)
     private val pose = RigidTransform(Vec3(0.0, 1.5, -1.0), Quaternion.fromAxisAngle(Vec3.UNIT_X, PI / 2))
-    private val tracker = LocalizationTracker(spec)
+    private val tracker = LocalizationTracker(spec, LegacyPolicy.policy)
 
     private fun frame(t: Long, quality: MarkerTrackingQuality = MarkerTrackingQuality.LAST_KNOWN) = tracker.update(
         TrackingInput(t, CameraTracking.Tracking, Vec3(0.0, 1.5, 0.0), MarkerObservation(spec.imageName, pose, quality)),

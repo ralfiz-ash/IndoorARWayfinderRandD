@@ -11,8 +11,10 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.indoorar.wayfinder.ui.diagnostics.AccuracyLogScreen
 import com.indoorar.wayfinder.ui.home.HomeScreen
 import com.indoorar.wayfinder.ui.marker.MarkerScreen
+import com.indoorar.wayfinder.ui.navigation.NavigationScreen
 import com.indoorar.wayfinder.ui.selection.PointSelectionScreen
 import com.indoorar.wayfinder.ui.theme.WayfinderTheme
 
@@ -31,6 +33,9 @@ private object Routes {
     const val HOME = "home"
     const val SELECT = "select"
     const val MARKER = "marker"
+    const val ACCURACY = "accuracy"
+    const val NAVIGATE = "navigate/{id}"
+    fun navigate(id: String) = "navigate/$id"
     const val SAVED_NAME = "saved_name"
 }
 
@@ -52,6 +57,8 @@ private fun WayfinderNavHost(container: AppContainer) {
                 snackbarHostState = snackbar,
                 onAddDestination = { nav.navigate(Routes.SELECT) },
                 onShowMarker = { nav.navigate(Routes.MARKER) },
+                onNavigate = { id -> nav.navigate(Routes.navigate(id)) },
+                onShowAccuracyLog = { nav.navigate(Routes.ACCURACY) },
             )
         }
         composable(Routes.SELECT) {
@@ -63,6 +70,13 @@ private fun WayfinderNavHost(container: AppContainer) {
                     nav.popBackStack()
                 },
             )
+        }
+        composable(Routes.NAVIGATE) { entry ->
+            val id = checkNotNull(entry.arguments?.getString("id"))
+            NavigationScreen(container = container, destinationId = id, onExit = { nav.popBackStack(Routes.HOME, inclusive = false) })
+        }
+        composable(Routes.ACCURACY) {
+            AccuracyLogScreen(container = container, onBack = { nav.popBackStack() })
         }
         composable(Routes.MARKER) {
             MarkerScreen(container = container, onBack = { nav.popBackStack() })

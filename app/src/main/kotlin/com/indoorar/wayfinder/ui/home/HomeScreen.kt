@@ -53,6 +53,8 @@ fun HomeScreen(
     snackbarHostState: SnackbarHostState,
     onAddDestination: () -> Unit,
     onShowMarker: () -> Unit,
+    onNavigate: (String) -> Unit,
+    onShowAccuracyLog: () -> Unit,
 ) {
     val app = LocalContext.current.applicationContext as Application
     val vm: HomeViewModel = viewModel { HomeViewModel(app, container) }
@@ -63,6 +65,7 @@ fun HomeScreen(
     var menuOpen by remember { mutableStateOf(false) }
 
     LaunchedEffect(vm) { vm.messageEvents.collect { snackbarHostState.showSnackbar(it) } }
+    LaunchedEffect(vm) { vm.navigateEvents.collect { onNavigate(it) } }
 
     Scaffold(
         topBar = {
@@ -72,6 +75,7 @@ fun HomeScreen(
                     TextButton(onClick = { menuOpen = true }) { Text("Venue") }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         DropdownMenuItem(text = { Text("Show reference marker") }, onClick = { menuOpen = false; onShowMarker() })
+                        DropdownMenuItem(text = { Text("Accuracy log") }, onClick = { menuOpen = false; onShowAccuracyLog() })
                         DropdownMenuItem(text = { Text("Marker was moved…") }, onClick = { menuOpen = false; confirmMarkerMoved = true })
                     }
                 },

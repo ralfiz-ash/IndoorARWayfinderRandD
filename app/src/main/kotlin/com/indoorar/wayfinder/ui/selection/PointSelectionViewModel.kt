@@ -3,6 +3,13 @@ package com.indoorar.wayfinder.ui.selection
 import android.app.Application
 import android.database.sqlite.SQLiteConstraintException
 import android.os.SystemClock
+import android.util.Log
+import com.indoorar.wayfinder.ReferencePointsStatus
+import com.indoorar.wayfinder.domain.accuracy.AccuracyCheckKind
+import com.indoorar.wayfinder.domain.accuracy.AccuracyCsv
+import com.indoorar.wayfinder.ui.diagnostics.AccuracySampler
+import com.indoorar.wayfinder.ui.diagnostics.AccuracyTarget
+import com.indoorar.wayfinder.ui.diagnostics.SampleResult
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.indoorar.wayfinder.AppContainer
@@ -25,6 +32,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -46,6 +54,10 @@ data class SelectionUiState(
     val noFloorSeconds: Double = 0.0,
     /** Saved destinations of the current frame version. */
     val savedCount: Int = 0,
+    val showDiagnostics: Boolean = false,
+    /** Non-null while choosing which known point the selected spot corresponds to. */
+    val accuracyTargets: List<AccuracyTarget>? = null,
+    val accuracyResult: String? = null,
 ) {
     val canSave: Boolean
         get() = selected != null && selected.anchorTracking && selected.localization.isReliable && !saving
@@ -67,7 +79,15 @@ internal class StageTimer(private val now: () -> Long = SystemClock::elapsedReal
     private fun seconds(since: Long?, t: Long) = since?.let { (t - it) / 1000.0 } ?: 0.0
 }
 
-private data class FormState(val name: String = "", val nameError: String? = null, val saving: Boolean = false, val hint: String? = null)
+private data class FormState(
+    val name: String = "",
+    val nameError: String? = null,
+    val saving: Boolean = false,
+    val hint: String? = null,
+    val showDiagnostics: Boolean = false,
+    val accuracyTargets: List<AccuracyTarget>? = null,
+    val accuracyResult: String? = null,
+)
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class PointSelectionViewModel(
@@ -97,7 +117,10 @@ class PointSelectionViewModel(
         savedCount,
     ) { (snapshot, reticle, selected), failure, f, count ->
         val (notLocalized, noFloor) = stageTimer.update(snapshot)
-        SelectionUiState(snapshot, reticle, selected, failure, f.name, f.nameError, f.saving, f.hint, notLocalized, noFloor, count)
+        SelectionUiState(
+            snapshot, reticle, selected, failure, f.name, f.nameError, f.saving, f.hint, notLocalized, noFloor, count,
+            f.showDiagnostics, f.accuracyTargets, f.accuracyResult,
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SelectionUiState())
 
     init {
@@ -135,8 +158,51 @@ class PointSelectionViewModel(
 
     fun retry() {
         selection.clearSelection()
-        form.update { FormState(name = it.name) }
+        form.update { FormState(name = it.name, showDiagnostics = it.showDiagnostics, accuracyResult = it.accuracyResult) }
     }
+
+    fun toggleDiagnostics() = form.update { it.copy(showDiagnostics = !it.showDiagnostics) }
+
+    /** Identifies this AR session in the accuracy log (repeatability across sessions). */
+    private val sessionId = java.util.UUID.randomUUID().toString().take(8)
+
+    fun openAccuracyCheck() {
+        viewModelScope.launch {
+            val venue = container.venueRepository.getActiveVenue()
+            val destinations = container.destinationRepository.observeDestinations(venue.id).first()
+                .filter { it.isValidFor(venue) }
+                .map { AccuracyTarget(it.name, AccuracyCheckKind.REPEATABILITY, it.positionInVenue) }
+            val references = (container.referencePoints(venue) as? ReferencePointsStatus.Ready)?.points.orEmpty()
+                .map { AccuracyTarget(it.name, AccuracyCheckKind.ABSOLUTE, it.positionInVenue) }
+            form.update { it.copy(accuracyTargets = references + destinations) }
+        }
+    }
+
+    fun cancelAccuracyCheck() = form.update { it.copy(accuracyTargets = null) }
+
+    fun logAccuracy(target: AccuracyTarget) {
+        val point = state.value.selected ?: return
+        viewModelScope.launch {
+            val venue = container.venueRepository.getActiveVenue()
+            val message = when (val r = AccuracySampler.build(point, target, venue, sessionId, System.currentTimeMillis())) {
+                SampleResult.NotLocalized -> "Not logged: localization is not reliable. Rescan the marker."
+                is SampleResult.Ok -> {
+                    container.accuracyLog.add(r.sample)
+                    container.exportAccuracyCsv(container.accuracyLog.observeSamples().first())
+                    Log.i("IndoorAR-Accuracy", AccuracyCsv.row(r.sample))
+                    val s = r.sample
+                    "Logged: ${UiText.meters(s.horizontalError)} from \"${s.referenceName}\" " +
+                        "(${if (s.kind == AccuracyCheckKind.ABSOLUTE) "absolute" else "repeatability"}; " +
+                        "app estimate ±${UiText.meters(s.estimatedErrorMeters)}, " +
+                        "${if (s.withinEstimate) "within" else "OUTSIDE"} estimate)"
+                }
+            }
+            selection.clearSelection()
+            form.update { it.copy(accuracyTargets = null, accuracyResult = message) }
+        }
+    }
+
+    fun dismissAccuracyResult() = form.update { it.copy(accuracyResult = null) }
 
     fun dismissHint() = form.update { it.copy(hint = null) }
 

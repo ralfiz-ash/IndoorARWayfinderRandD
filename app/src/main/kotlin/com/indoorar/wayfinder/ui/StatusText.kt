@@ -4,6 +4,8 @@ import com.indoorar.wayfinder.arcore.ArFailure
 import com.indoorar.wayfinder.arcore.ArFrameSnapshot
 import com.indoorar.wayfinder.arcore.SelectedPoint
 import com.indoorar.wayfinder.domain.localization.CameraTracking
+import com.indoorar.wayfinder.domain.localization.FixRejection
+import com.indoorar.wayfinder.domain.localization.LocalizationDiagnostics
 import com.indoorar.wayfinder.domain.localization.LocalizationConfidence
 import com.indoorar.wayfinder.domain.localization.LocalizationStatus
 import com.indoorar.wayfinder.domain.localization.LostReason
@@ -75,6 +77,25 @@ object UiText {
         MarkerMounting.FLOOR -> "flat on the floor"
     }
 
+    /**
+     * Specific recovery instruction derived from why the marker view is not accepted, or from an
+     * unresolved disagreement between the marker and the current frame. Null if nothing to say.
+     */
+    fun markerRecovery(d: LocalizationDiagnostics): String? {
+        d.pendingDisagreementMeters?.let {
+            return "Your view of the marker disagrees with the current position by ${meters(it)}. " +
+                "Keep facing the marker and hold still to recalibrate."
+        }
+        return when (d.fixRejection) {
+            FixRejection.TOO_FAR -> "Marker seen from ${d.distanceToMarkerMeters?.let(::meters) ?: "too far"}. Move within 3 m of it."
+            FixRejection.TOO_OBLIQUE ->
+                "Viewing angle ${d.viewingAngleDegrees?.toInt() ?: "?"}°. Face the marker more directly (within 60°)."
+            FixRejection.STABILIZING -> "Marker found. Hold steady while calibrating (${d.stableFrames}/${d.requiredStableFrames})."
+            FixRejection.UNSTABLE -> "Marker detection is jittery. Hold the phone still and avoid glare or poor light."
+            FixRejection.ORIENTATION_MISMATCH, null -> null
+        }
+    }
+
     /** Seconds without a marker fix before suggesting marker troubleshooting. */
     const val MARKER_HELP_AFTER_SECONDS = 12.0
     /** Seconds without a floor plane (while localized) before suggesting floor troubleshooting. */
@@ -94,18 +115,21 @@ object UiText {
     ): String {
         val mounting = marker.mounting
         val loc = snapshot.localization
+        val recovery = markerRecovery(snapshot.diagnostics)
         return when {
             snapshot.camera is CameraTracking.Limited ->
                 "Tracking limited: ${issue((snapshot.camera as CameraTracking.Limited).reason)}."
             snapshot.camera == CameraTracking.Stopped -> "Starting camera…"
-            loc is LocalizationStatus.Lost -> "Localization lost (${lost(loc.reason)}). Point the camera at the venue marker again."
+            loc is LocalizationStatus.Lost ->
+                recovery ?: "Localization lost (${lost(loc.reason)}). Point the camera at the venue marker again."
             loc is LocalizationStatus.NotLocalized && loc.reason == NotLocalizedReason.MARKER_ORIENTATION_MISMATCH ->
                 "Marker found, but it should be mounted ${mounting(mounting)}. Check the venue setup."
+            recovery != null && (loc !is LocalizationStatus.Localized || snapshot.diagnostics.pendingDisagreementMeters != null) -> recovery
             loc !is LocalizationStatus.Localized && notLocalizedSeconds >= MARKER_HELP_AFTER_SECONDS ->
                 "Marker not found yet. Check that the ${(marker.physicalWidthMeters * 100).toInt()} cm printed marker is " +
                     "${mounting(mounting)}, well lit without glare, fully in view, and 0.5–2 m away. Hold the phone steady."
             loc !is LocalizationStatus.Localized -> "Step 1: Point the camera at the venue marker from within 1–2 m."
-            !loc.isReliable -> "Position uncertain. Walk back to the marker and scan it again."
+            !loc.isReliable -> "Position uncertain (±${meters(loc.estimatedErrorMeters)}). Walk back to the marker and scan it again."
             selected != null -> "Point selected. Name it and save, or retry."
             !snapshot.floorPlaneDetected && noFloorSeconds >= FLOOR_HELP_AFTER_SECONDS ->
                 "Floor not detected yet. Aim at the floor 1–3 m ahead and move the phone sideways slowly. " +

@@ -188,4 +188,21 @@ class NavigationSessionTest {
         assertEquals(NavigationState.Idle, s.stop())
         assertEquals(NavigationState.Idle, step(s, 0.0, 3.0))
     }
+
+    @Test
+    fun arrivalRadiusIsConfigurableAndErrorMustFitInsideIt() {
+        val wide = NavigationSession(Fixtures.office, Fixtures.venue, com.indoorar.wayfinder.navigation.guidance.NavigationPolicy(arrivalRadiusMeters = 2.5, arrivalDwellNanos = 0))
+        wide.start(dest)
+        step(wide, 0.0, 2.0)
+        assertEquals(NavigationState.Arrived(dest), step(wide, 10.0, 17.5)) // 2.0 m away
+        val narrow = NavigationSession(Fixtures.office, Fixtures.venue, com.indoorar.wayfinder.navigation.guidance.NavigationPolicy(arrivalRadiusMeters = 1.0, arrivalDwellNanos = 0))
+        narrow.start(dest)
+        step(narrow, 0.0, 2.0)
+        assertTrue(step(narrow, 10.0, 17.5) is NavigationState.Navigating)
+        // 0.55 m estimated error is still MEDIUM (reliable for guidance) but too coarse for arrival.
+        assertTrue(step(narrow, 10.0, 19.3, localized(0.55, LocalizationConfidence.MEDIUM)) is NavigationState.Navigating)
+        assertEquals(NavigationState.Arrived(dest), step(narrow, 10.0, 19.3))
+        val invalid = runCatching { com.indoorar.wayfinder.navigation.guidance.NavigationPolicy(arrivalRadiusMeters = 1.0, maxArrivalErrorMeters = 1.5) }
+        assertTrue(invalid.isFailure)
+    }
 }

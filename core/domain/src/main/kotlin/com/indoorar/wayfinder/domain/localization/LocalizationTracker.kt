@@ -1,20 +1,32 @@
 package com.indoorar.wayfinder.domain.localization
 
+import com.indoorar.wayfinder.domain.geometry.Vec3
+import com.indoorar.wayfinder.domain.geometry.angleDifference
+import com.indoorar.wayfinder.domain.geometry.wrapAngle
 import com.indoorar.wayfinder.domain.venue.AlignmentResult
 import com.indoorar.wayfinder.domain.venue.MarkerSpec
 import com.indoorar.wayfinder.domain.venue.VenueAlignment
 import com.indoorar.wayfinder.domain.venue.VenueFrameEstimator
-import com.indoorar.wayfinder.domain.geometry.Vec3
+import kotlin.math.abs
+import kotlin.math.acos
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.max
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
- * Turns per-frame AR tracking data into a [LocalizationStatus].
+ * Turns per-frame AR tracking data into a [LocalizationStatus] plus [LocalizationDiagnostics].
  *
- * Rules:
- *  - The venue frame is only established from a fully tracked marker while the camera tracks.
- *  - While the marker is out of view, the alignment is kept, but its error estimate grows with the
- *    distance walked (odometry drift).
- *  - Short camera interruptions are tolerated with an error penalty; long ones, a stopped session,
- *    or excessive estimated error require the marker to be scanned again.
+ * Coordinate-frame validation:
+ *  - The venue frame is established only from a *stable* set of fully tracked marker observations
+ *    (min frame count, small spread), seen from within range and not too obliquely.
+ *  - A later marker view that disagrees with the current frame must itself be stable before it
+ *    replaces the frame; the size of that correction is reported (drift evidence).
+ *  - While the marker is out of view, the estimated error grows with distance walked (odometry drift)
+ *    and with distance from the marker (heading uncertainty × lever arm).
+ *  - Short camera interruptions and AR map corrections add a penalty; long interruptions, a stopped
+ *    session, a lost marker trackable or excessive error require a rescan.
  *
  * Not thread-safe: feed it from a single thread (the AR render thread).
  */
@@ -22,26 +34,52 @@ class LocalizationTracker(
     private val marker: MarkerSpec,
     private val policy: LocalizationPolicy = LocalizationPolicy(),
 ) {
+    private class Candidate(val alignment: VenueAlignment, val timestampNanos: Long, val distance: Double)
+
     private val smoother = AlignmentSmoother(
         policy.smoothingTimeConstantSeconds,
         policy.smoothingResetMeters,
         policy.smoothingResetRadians,
     )
-    private var errorAtLastFix = 0.0
-    private var accumulatedError = 0.0
+    private val candidates = ArrayDeque<Candidate>()
+    private var fixPositionError = 0.0
+    private var yawSigma = policy.baseYawSigmaRadians
+    private var drift = 0.0
+    private var penalties = 0.0
+    private var walkedSinceFix = 0.0
+    private var lastFixNanos: Long? = null
     private var lastCameraPosition: Vec3? = null
     private var interruptedSince: Long? = null
+    private var pendingDisagreement: Double? = null
+    private var fixSpread: Pair<Double, Double>? = null
+    private var lastCorrection: Pair<Double, Double>? = null
+    private var frameCorrections = 0
+    private var mapCorrections = 0
+    private var interruptions = 0
 
     var status: LocalizationStatus = LocalizationStatus.NotLocalized(NotLocalizedReason.SCAN_MARKER)
         private set
 
+    var diagnostics: LocalizationDiagnostics = LocalizationDiagnostics()
+        private set
+
+    // Per-frame observation details for diagnostics.
+    private var frameQuality: MarkerTrackingQuality? = null
+    private var frameDistance: Double? = null
+    private var frameAngle: Double? = null
+    private var frameRejection: FixRejection? = null
+    private var frameLever: Double? = null
+    private var frameTimestamp = 0L
+
     /** Call when the AR session is (re)created: session coordinates from earlier sessions are meaningless. */
     fun resetForNewSession() {
         smoother.reset()
+        candidates.clear()
         lastCameraPosition = null
         interruptedSince = null
-        accumulatedError = 0.0
+        resetErrorModel()
         status = LocalizationStatus.NotLocalized(NotLocalizedReason.SCAN_MARKER)
+        diagnostics = LocalizationDiagnostics()
     }
 
     /**
@@ -50,17 +88,22 @@ class LocalizationTracker(
      * penalty; long pauses require a marker rescan.
      */
     fun onSessionResumed(pausedForNanos: Long) {
+        candidates.clear()
         if (smoother.current == null) return
+        interruptions++
         if (pausedForNanos > policy.maxInterruptionNanos) {
             status = dropAlignment(LostReason.INTERRUPTION_TOO_LONG, status)
         } else {
-            accumulatedError += policy.interruptionPenaltyMeters
+            penalties += policy.interruptionPenaltyMeters
             lastCameraPosition = null
         }
     }
 
     fun update(input: TrackingInput): LocalizationStatus {
+        frameQuality = null; frameDistance = null; frameAngle = null; frameRejection = null; frameLever = null
+        frameTimestamp = input.timestampNanos
         status = computeStatus(input)
+        diagnostics = buildDiagnostics()
         return status
     }
 
@@ -68,53 +111,44 @@ class LocalizationTracker(
         val current = status
         when (val camera = input.camera) {
             CameraTracking.Stopped -> return dropAlignment(LostReason.TRACKING_STOPPED, current)
-
             is CameraTracking.Limited -> {
+                candidates.clear()
                 val alignment = smoother.current ?: return statusWithoutAlignment(current)
-                val since = interruptedSince ?: input.timestampNanos.also { interruptedSince = it }
+                val since = interruptedSince ?: input.timestampNanos.also { interruptedSince = it; interruptions++ }
                 if (input.timestampNanos - since > policy.maxInterruptionNanos) {
                     return dropAlignment(LostReason.INTERRUPTION_TOO_LONG, current)
                 }
                 lastCameraPosition = null
                 return LocalizationStatus.Interrupted(alignment, camera.reason, since)
             }
-
             CameraTracking.Tracking -> Unit
         }
 
-        // Camera is tracking.
         if (interruptedSince != null) {
             interruptedSince = null
-            if (smoother.current != null) accumulatedError += policy.interruptionPenaltyMeters
+            if (smoother.current != null) penalties += policy.interruptionPenaltyMeters
         }
 
         val observation = input.marker?.takeIf { it.imageName == marker.imageName }
         val cameraPosition = input.cameraPosition
 
         if (observation != null) {
+            frameQuality = observation.quality
             when (val result = VenueFrameEstimator.estimate(observation.poseInSession, marker.mounting)) {
-                is AlignmentResult.OrientationMismatch ->
-                    if (observation.quality == MarkerTrackingQuality.FULL && smoother.current == null) {
+                is AlignmentResult.OrientationMismatch -> if (observation.quality == MarkerTrackingQuality.FULL) {
+                    frameRejection = FixRejection.ORIENTATION_MISMATCH
+                    candidates.clear()
+                    if (smoother.current == null) {
                         return LocalizationStatus.NotLocalized(NotLocalizedReason.MARKER_ORIENTATION_MISMATCH)
                     }
-
-                is AlignmentResult.Valid -> {
-                    val distanceToMarker = cameraPosition?.distanceTo(observation.poseInSession.translation)
-                    val isFreshFix = observation.quality == MarkerTrackingQuality.FULL &&
-                        distanceToMarker != null && distanceToMarker <= policy.maxFixDistanceMeters
-                    if (isFreshFix) {
-                        smoother.update(result.alignment, input.timestampNanos)
-                        errorAtLastFix = policy.fixErrorMeters + policy.fixErrorPerMeterToMarker * distanceToMarker
-                        accumulatedError = 0.0
-                    } else if (smoother.current != null) {
-                        // The tracker's last-known pose follows map refinements; adopt it without
-                        // resetting the accumulated drift estimate.
-                        smoother.update(result.alignment, input.timestampNanos)
-                    }
+                }
+                is AlignmentResult.Valid -> if (observation.quality == MarkerTrackingQuality.FULL) {
+                    handleFullObservation(observation, result.alignment, cameraPosition, input.timestampNanos)
+                } else {
+                    handleLastKnown(result.alignment, input.timestampNanos)
                 }
             }
         } else if (smoother.current != null) {
-            // The AR system stopped tracking the marker trackable altogether.
             return dropAlignment(LostReason.MARKER_TRACKING_LOST, current)
         }
 
@@ -123,16 +157,20 @@ class LocalizationTracker(
         if (cameraPosition != null) {
             lastCameraPosition?.let { last ->
                 val step = cameraPosition.distanceTo(last)
-                accumulatedError += if (step > policy.maxFrameJumpMeters) {
-                    policy.interruptionPenaltyMeters
+                if (step > policy.maxFrameJumpMeters) {
+                    penalties += policy.interruptionPenaltyMeters
                 } else {
-                    step * policy.driftPerMeterWalked
+                    drift += step * policy.driftPerMeterWalked
+                    walkedSinceFix += step
                 }
             }
             lastCameraPosition = cameraPosition
+            frameLever = cameraPosition.horizontalDistanceTo(alignment.originInSession)
         }
 
-        val error = errorAtLastFix + accumulatedError
+        var error = totalError()
+        // An unresolved disagreement with a fresh marker view is itself evidence of error.
+        pendingDisagreement?.let { error = max(error, it) }
         if (error > policy.lostErrorMeters) return dropAlignment(LostReason.DRIFT_TOO_LARGE, current)
 
         return LocalizationStatus.Localized(
@@ -142,6 +180,128 @@ class LocalizationTracker(
             markerInView = observation?.quality == MarkerTrackingQuality.FULL,
         )
     }
+
+    private fun totalError(): Double =
+        fixPositionError + yawSigma * (frameLever ?: 0.0) + drift + penalties
+
+    private fun handleFullObservation(observation: MarkerObservation, measured: VenueAlignment, camera: Vec3?, t: Long) {
+        val markerPose = observation.poseInSession
+        if (camera == null) return
+        val toCamera = camera - markerPose.translation
+        val distance = toCamera.length
+        val normal = markerPose.rotation.rotate(Vec3.UNIT_Y)
+        val angle = acos((normal dot toCamera.normalized()).coerceIn(-1.0, 1.0))
+        frameDistance = distance
+        frameAngle = Math.toDegrees(angle)
+        when {
+            distance > policy.maxFixDistanceMeters -> { frameRejection = FixRejection.TOO_FAR; return }
+            angle > policy.maxViewingAngleRadians -> { frameRejection = FixRejection.TOO_OBLIQUE; return }
+        }
+
+        val current = smoother.current
+        if (current != null && agrees(current, measured)) {
+            // Consistent refinement of the existing frame: smooth it in and reset drift.
+            candidates.clear()
+            pendingDisagreement = null
+            smoother.update(measured, t)
+            markFix(t, distance)
+            return
+        }
+
+        // Either no frame yet, or this view disagrees: collect a stable candidate set first.
+        candidates.addLast(Candidate(measured, t, distance))
+        while (candidates.isNotEmpty() && t - candidates.first().timestampNanos > policy.fixWindowNanos) candidates.removeFirst()
+        while (candidates.size > policy.minStableFixFrames) candidates.removeFirst()
+        if (current != null) {
+            pendingDisagreement = current.originInSession.distanceTo(measured.originInSession) +
+                abs(angleDifference(current.yawRadians, measured.yawRadians)) * (frameLever ?: distance)
+        }
+        if (candidates.size < policy.minStableFixFrames) {
+            frameRejection = FixRejection.STABILIZING
+            return
+        }
+        val mean = meanAlignment(candidates.map { it.alignment })
+        val spreadM = candidates.maxOf { it.alignment.originInSession.distanceTo(mean.originInSession) }
+        val yawDiffs = candidates.map { angleDifference(mean.yawRadians, it.alignment.yawRadians) }
+        val spreadYaw = yawDiffs.maxOf { abs(it) }
+        if (spreadM > policy.maxFixSpreadMeters || spreadYaw > policy.maxFixSpreadRadians) {
+            frameRejection = FixRejection.UNSTABLE
+            return
+        }
+        if (current != null) {
+            lastCorrection = current.originInSession.distanceTo(mean.originInSession) to
+                Math.toDegrees(abs(angleDifference(current.yawRadians, mean.yawRadians)))
+            frameCorrections++
+        }
+        val yawStd = sqrt(yawDiffs.sumOf { it * it } / yawDiffs.size)
+        yawSigma = max(policy.baseYawSigmaRadians, yawStd)
+        fixSpread = spreadM to Math.toDegrees(spreadYaw)
+        smoother.reset()
+        smoother.update(mean, t)
+        candidates.clear()
+        pendingDisagreement = null
+        markFix(t, distance)
+    }
+
+    private fun handleLastKnown(measured: VenueAlignment, t: Long) {
+        val current = smoother.current ?: return // Never establish a frame from a last-known pose.
+        candidates.clear()
+        if (!agrees(current, measured)) {
+            // ARCore corrected its map and moved the marker: follow it, but trust it less.
+            mapCorrections++
+            penalties += policy.interruptionPenaltyMeters
+        }
+        smoother.update(measured, t)
+    }
+
+    private fun agrees(a: VenueAlignment, b: VenueAlignment) =
+        a.originInSession.distanceTo(b.originInSession) <= policy.smoothingResetMeters &&
+            abs(angleDifference(a.yawRadians, b.yawRadians)) <= policy.smoothingResetRadians
+
+    private fun markFix(t: Long, distance: Double) {
+        fixPositionError = policy.fixErrorMeters + policy.fixErrorPerMeterToMarker * distance
+        drift = 0.0
+        penalties = 0.0
+        walkedSinceFix = 0.0
+        lastFixNanos = t
+    }
+
+    private fun meanAlignment(list: List<VenueAlignment>): VenueAlignment {
+        var origin = Vec3.ZERO
+        var s = 0.0
+        var c = 0.0
+        for (a in list) {
+            origin += a.originInSession
+            s += sin(a.yawRadians)
+            c += cos(a.yawRadians)
+        }
+        return VenueAlignment(origin * (1.0 / list.size), wrapAngle(atan2(s, c)))
+    }
+
+    private fun buildDiagnostics() = LocalizationDiagnostics(
+        markerQuality = frameQuality,
+        distanceToMarkerMeters = frameDistance,
+        viewingAngleDegrees = frameAngle,
+        fixRejection = frameRejection,
+        stableFrames = candidates.size,
+        requiredStableFrames = policy.minStableFixFrames,
+        fixSpreadMeters = fixSpread?.first,
+        fixSpreadDegrees = fixSpread?.second,
+        yawSigmaDegrees = if (smoother.current != null) Math.toDegrees(yawSigma) else null,
+        errorFix = if (smoother.current != null) fixPositionError else 0.0,
+        errorHeadingLever = if (smoother.current != null) yawSigma * (frameLever ?: 0.0) else 0.0,
+        errorDrift = drift,
+        errorPenalties = penalties,
+        leverArmMeters = frameLever,
+        walkedSinceFixMeters = walkedSinceFix,
+        secondsSinceFix = lastFixNanos?.takeIf { smoother.current != null }?.let { (frameTimestamp - it) / 1e9 },
+        pendingDisagreementMeters = pendingDisagreement,
+        lastCorrectionMeters = lastCorrection?.first,
+        lastCorrectionDegrees = lastCorrection?.second,
+        frameCorrections = frameCorrections,
+        mapCorrections = mapCorrections,
+        interruptions = interruptions,
+    )
 
     /** Keeps reporting [LocalizationStatus.Lost] until a fresh marker fix, so the UI keeps asking for a rescan. */
     private fun statusWithoutAlignment(current: LocalizationStatus): LocalizationStatus =
@@ -153,12 +313,23 @@ class LocalizationTracker(
         else -> LocalizationConfidence.LOW
     }
 
+    private fun resetErrorModel() {
+        fixPositionError = 0.0
+        yawSigma = policy.baseYawSigmaRadians
+        drift = 0.0
+        penalties = 0.0
+        walkedSinceFix = 0.0
+        lastFixNanos = null
+        pendingDisagreement = null
+    }
+
     private fun dropAlignment(reason: LostReason, current: LocalizationStatus): LocalizationStatus {
         val hadAlignment = smoother.current != null || current is LocalizationStatus.Lost
         smoother.reset()
+        candidates.clear()
         lastCameraPosition = null
         interruptedSince = null
-        accumulatedError = 0.0
+        resetErrorModel()
         return if (hadAlignment) {
             (current as? LocalizationStatus.Lost) ?: LocalizationStatus.Lost(reason)
         } else {

@@ -45,6 +45,8 @@ data class HomeUiState(
 class HomeViewModel(private val app: Application, private val container: AppContainer) : ViewModel() {
     private val messages = Channel<String>(Channel.BUFFERED)
     val messageEvents = messages.receiveAsFlow()
+    private val navigateRequests = Channel<String>(Channel.BUFFERED)
+    val navigateEvents = navigateRequests.receiveAsFlow()
 
     private val venueFlow = container.venueRepository.observeActiveVenue()
 
@@ -126,9 +128,14 @@ class HomeViewModel(private val app: Application, private val container: AppCont
             is GraphStatus.Ready -> {
                 val attached = RoutePlanner(graph.graph)
                     .attach(destination.positionInVenue, destination.floorId, RoutingPolicy().maxDestinationSnapMeters)
-                if (attached == null) UiText.routeFailure(RouteFailure.DESTINATION_OFF_GRAPH)
-                // Route logic is ready; the AR guidance screen is the next milestone.
-                else "Route planning is ready, but the AR navigation screen is not implemented yet."
+                if (attached == null) {
+                    UiText.routeFailure(RouteFailure.DESTINATION_OFF_GRAPH)
+                } else if (!destination.isValidFor(venue)) {
+                    "\"${destination.name}\" was saved before the marker was moved. Recapture it."
+                } else {
+                    navigateRequests.trySend(destination.id.value)
+                    return
+                }
             }
             else -> "Cannot navigate: ${UiText.graphStatus(graph).text}. No straight-line routes are used."
         }

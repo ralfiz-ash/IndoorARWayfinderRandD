@@ -18,6 +18,7 @@ android {
 
 dependencies {
     api(project(":core:domain"))
+    api(project(":core:navigation"))
     api(libs.arcore)
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)

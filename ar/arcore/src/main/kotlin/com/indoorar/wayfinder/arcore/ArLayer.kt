@@ -4,6 +4,7 @@ import com.google.ar.core.Frame
 import com.google.ar.core.Session
 import com.indoorar.wayfinder.arcore.render.MeshRenderer
 import com.indoorar.wayfinder.domain.geometry.RigidTransform
+import com.indoorar.wayfinder.domain.localization.LocalizationDiagnostics
 import com.indoorar.wayfinder.domain.localization.LocalizationStatus
 
 /** Per-frame data handed to layers on the GL thread. */
@@ -15,6 +16,7 @@ class ArFrameContext internal constructor(
     val cameraPose: RigidTransform?,
     val viewportWidth: Int,
     val viewportHeight: Int,
+    val diagnostics: LocalizationDiagnostics,
 )
 
 /**
