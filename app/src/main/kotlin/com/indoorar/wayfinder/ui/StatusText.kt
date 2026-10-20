@@ -12,6 +12,8 @@ import com.indoorar.wayfinder.domain.localization.TrackingIssue
 import com.indoorar.wayfinder.domain.selection.HitRejection
 import com.indoorar.wayfinder.domain.venue.MarkerMounting
 import com.indoorar.wayfinder.domain.venue.MarkerSpec
+import com.indoorar.wayfinder.GraphStatus
+import com.indoorar.wayfinder.navigation.route.RouteFailure
 import java.util.Locale
 
 enum class StatusLevel { GOOD, WARN, BAD, NEUTRAL }
@@ -112,6 +114,27 @@ object UiText {
             !snapshot.floorPlaneDetected -> "Step 2: Marker found. Slowly sweep the camera over the floor to detect it."
             else -> "Step 3: Aim at the destination on the floor and tap it."
         }
+    }
+
+    fun routeFailure(reason: RouteFailure) = when (reason) {
+        RouteFailure.NO_GRAPH -> "No walkable route graph is configured for this venue."
+        RouteFailure.DIFFERENT_FLOORS -> "Routes between floors are not supported yet."
+        RouteFailure.START_OFF_GRAPH -> "You are not near a mapped walkway. Walk to a corridor and try again."
+        RouteFailure.DESTINATION_OFF_GRAPH -> "This destination is not near any mapped walkway. Add a path to it in the venue graph."
+        RouteFailure.NO_CONNECTED_PATH -> "No walkable route connects your position to this destination."
+    }
+
+    fun graphStatus(status: GraphStatus): StatusText = when (status) {
+        is GraphStatus.Ready -> StatusText(
+            "Route graph: ${status.graph.nodes.size} nodes, ${status.graph.edges.count { !it.blocked }} paths",
+            StatusLevel.GOOD,
+        )
+        GraphStatus.NotConfigured -> StatusText("No route graph configured: navigation unavailable", StatusLevel.WARN)
+        is GraphStatus.Invalid -> StatusText("Route graph invalid: ${status.message}", StatusLevel.BAD)
+        is GraphStatus.FrameMismatch -> StatusText(
+            "Route graph measured for frame v${status.graphVersion}, venue is v${status.venueVersion}: re-measure it",
+            StatusLevel.BAD,
+        )
     }
 
     fun failure(failure: ArFailure) = when (failure) {

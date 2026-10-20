@@ -28,12 +28,21 @@ object DefaultVenue {
 }
 
 /** Manual dependency container: small enough that a DI framework would add more than it saves. */
-class AppContainer(context: Context) {
+class AppContainer(private val context: Context) {
     val venueConfig: Venue = DefaultVenue.venue
     private val data = WayfinderData(context, venueConfig)
     val venueRepository = data.venueRepository
     val destinationRepository = data.destinationRepository
     val destinationService = DestinationService(destinationRepository)
+
+    /**
+     * Route graph status for the given venue state (frame version can change at runtime).
+     * Loaded lazily from assets; small enough to parse on demand.
+     */
+    private val graphCache = HashMap<Int, GraphStatus>()
+    fun graphStatus(venue: Venue): GraphStatus = synchronized(graphCache) {
+        graphCache.getOrPut(venue.frameVersion) { VenueGraphLoader.load(context, venue) }
+    }
 
     /** Last localization state reported by an AR screen in this app run (for the home status card). */
     val lastLocalization = MutableStateFlow<LocalizationStatus?>(null)

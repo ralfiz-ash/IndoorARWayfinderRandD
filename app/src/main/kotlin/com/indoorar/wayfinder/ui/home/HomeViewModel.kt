@@ -6,6 +6,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.ar.core.ArCoreApk
 import com.indoorar.wayfinder.AppContainer
+import com.indoorar.wayfinder.GraphStatus
+import com.indoorar.wayfinder.navigation.route.RouteFailure
+import com.indoorar.wayfinder.navigation.route.RoutePlanner
+import com.indoorar.wayfinder.navigation.route.RoutingPolicy
+import com.indoorar.wayfinder.ui.UiText
 import com.indoorar.wayfinder.domain.destination.Destination
 import com.indoorar.wayfinder.domain.destination.DestinationError
 import com.indoorar.wayfinder.domain.destination.DestinationResult
@@ -24,7 +29,8 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-data class DestinationItem(val destination: Destination, val valid: Boolean)
+/** [onGraph] is null when no usable graph exists; false if no mapped walkway is close enough to reach it. */
+data class DestinationItem(val destination: Destination, val valid: Boolean, val onGraph: Boolean? = null)
 
 data class HomeUiState(
     val loading: Boolean = true,
@@ -32,6 +38,7 @@ data class HomeUiState(
     val destinations: List<DestinationItem> = emptyList(),
     val lastLocalization: LocalizationStatus? = null,
     val arAvailability: String = "Checking…",
+    val graphStatus: GraphStatus? = null,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -45,12 +52,23 @@ class HomeViewModel(private val app: Application, private val container: AppCont
         venueFlow,
         venueFlow.flatMapLatest { venue ->
             container.destinationRepository.observeDestinations(venue.id)
-                .map { list -> list.map { DestinationItem(it, it.isValidFor(venue)) } }
+                .map { list ->
+                    val planner = container.graphStatus(venue).graphOrNull?.let { RoutePlanner(it) }
+                    list.map { d ->
+                        DestinationItem(
+                            destination = d,
+                            valid = d.isValidFor(venue),
+                            onGraph = planner?.let {
+                                it.attach(d.positionInVenue, d.floorId, RoutingPolicy().maxDestinationSnapMeters) != null
+                            },
+                        )
+                    }
+                }
         },
         container.lastLocalization,
         arAvailabilityFlow(),
     ) { venue, destinations, localization, availability ->
-        HomeUiState(false, venue, destinations, localization, availability)
+        HomeUiState(false, venue, destinations, localization, availability, container.graphStatus(venue))
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HomeUiState())
 
     /** ARCore's availability check is asynchronous; poll until it settles. */
@@ -103,8 +121,18 @@ class HomeViewModel(private val app: Application, private val container: AppCont
     }
 
     fun navigateTo(destination: Destination) {
-        // Milestone 2: route graph + AR navigation. Be explicit rather than pretending.
-        messages.trySend("Navigation to \"${destination.name}\" is not implemented yet (milestone 2).")
+        val venue = state.value.venue ?: return
+        val message = when (val graph = container.graphStatus(venue)) {
+            is GraphStatus.Ready -> {
+                val attached = RoutePlanner(graph.graph)
+                    .attach(destination.positionInVenue, destination.floorId, RoutingPolicy().maxDestinationSnapMeters)
+                if (attached == null) UiText.routeFailure(RouteFailure.DESTINATION_OFF_GRAPH)
+                // Route logic is ready; the AR guidance screen is the next milestone.
+                else "Route planning is ready, but the AR navigation screen is not implemented yet."
+            }
+            else -> "Cannot navigate: ${UiText.graphStatus(graph).text}. No straight-line routes are used."
+        }
+        messages.trySend(message)
     }
 
     fun markerMoved() {

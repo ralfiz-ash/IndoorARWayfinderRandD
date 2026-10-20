@@ -1,0 +1,26 @@
+{
+  "formatVersion": 1,
+  "venueId": "default-venue",
+  "frameVersion": 1,
+  "nodes": [
+    { "id": "entrance",   "type": "ENTRANCE", "floor": "ground", "x": 0,  "z": 1,  "name": "Main entrance" },
+    { "id": "j1",         "type": "JUNCTION", "floor": "ground", "x": 0,  "z": 10 },
+    { "id": "j2",         "type": "JUNCTION", "floor": "ground", "x": 0,  "z": 20 },
+    { "id": "j3",         "type": "JUNCTION", "floor": "ground", "x": 10, "z": 10 },
+    { "id": "j4",         "type": "JUNCTION", "floor": "ground", "x": 10, "z": 20 },
+    { "id": "door-a",     "type": "ENTRANCE", "floor": "ground", "x": -3, "z": 10, "name": "Meeting Room A door" },
+    { "id": "room-a",     "type": "ROOM",     "floor": "ground", "x": -6, "z": 10, "name": "Meeting Room A" },
+    { "id": "store-1",    "type": "CORRIDOR", "floor": "ground", "x": 30, "z": 0 },
+    { "id": "store-2",    "type": "ROOM",     "floor": "ground", "x": 30, "z": 5,  "name": "Storage (separate wing)" }
+  ],
+  "edges": [
+    { "from": "entrance", "to": "j1" },
+    { "from": "j1", "to": "j2" },
+    { "from": "j1", "to": "j3" },
+    { "from": "j3", "to": "j4" },
+    { "from": "j2", "to": "j4" },
+    { "from": "j1", "to": "door-a" },
+    { "from": "door-a", "to": "room-a" },
+    { "from": "store-1", "to": "store-2" }
+  ]
+}

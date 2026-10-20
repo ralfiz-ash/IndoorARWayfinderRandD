@@ -8,7 +8,7 @@ native iOS (Swift, ARKit, RealityKit) implementation can mirror the same contrac
 | Milestone | Scope | State |
 |---|---|---|
 | 1 | Camera AR view, reference-marker localization, AR point selection, save/rename/delete destinations, relocalization gate (`DestinationLocator`), saved points shown in AR after rescan | **Implemented** — automated tests pass; physical marker workflow needs on-site validation ([docs/DEVICE_TESTS.md](docs/DEVICE_TESTS.md)) |
-| 2 | Venue route graph, Dijkstra, turn instructions, navigation state machine, arrival logic (pure Kotlin + tests) | Not started |
+| 2 | Venue route graph (JSON), Dijkstra, turn instructions, progress, deviation/re-routing, arrival, navigation state machine (`:core:navigation`, pure Kotlin) | **Implemented** — unit tested; the shipped graph is empty until you map your venue ([docs/ROUTE_GRAPH.md](docs/ROUTE_GRAPH.md)) |
 | 3 | Navigation screen: AR arrow, beacon, next-turn, distance label, fallback guidance, arrival dialog | Not started |
 
 Tapping a destination on the home screen currently shows "not implemented yet" instead of
@@ -36,6 +36,8 @@ pretending to navigate.
 ```
 :core:domain   Pure Kotlin. Public API, domain models, coordinate math, localization tracker,
                hit validation, destination use cases. No Android / ARCore types.
+:core:navigation  Pure Kotlin. Route graph + JSON format, Dijkstra planner, turn generation,
+               route progress, NavigationSession state machine. No ARCore / rendering.
 :core:data     Room persistence + repository implementations (WayfinderData entry point).
 :ar:arcore     ARCore adapter: session lifecycle, marker database, ARCore→domain conversions,
                OpenGL ES renderer, pluggable ArLayers (PointSelectionLayer).

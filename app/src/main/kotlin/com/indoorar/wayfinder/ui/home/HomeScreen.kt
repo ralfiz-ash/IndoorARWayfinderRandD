@@ -165,6 +165,10 @@ private fun StatusCard(state: HomeUiState) {
                 "Localization is per AR session: every time the camera view opens, scan the marker first.",
                 style = MaterialTheme.typography.bodySmall,
             )
+            state.graphStatus?.let {
+                val g = UiText.graphStatus(it)
+                Text(g.text, color = g.level.color(), style = MaterialTheme.typography.bodySmall)
+            }
             Text(state.arAvailability, style = MaterialTheme.typography.bodySmall)
         }
     }
@@ -195,6 +199,9 @@ private fun DestinationRow(item: DestinationItem, onNavigate: () -> Unit, onRena
                     String.format(Locale.US, "x %.2f, z %.2f m from marker · ±%.2f m", p.x, p.z, d.estimatedErrorMeters),
                     style = MaterialTheme.typography.bodySmall,
                 )
+                if (item.valid && item.onGraph == false) {
+                    Text("Not near a mapped walkway: unreachable", color = StatusColors.Warn, style = MaterialTheme.typography.bodySmall)
+                }
                 if (!item.valid) {
                     Text("Captured in frame v${d.frameVersion}: recapture needed", color = StatusColors.Bad, style = MaterialTheme.typography.bodySmall)
                 }

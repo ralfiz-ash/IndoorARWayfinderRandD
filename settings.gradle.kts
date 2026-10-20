@@ -22,5 +22,6 @@ dependencyResolutionManagement {
 rootProject.name = "IndoorARWayfinder"
 include(":app")
 include(":core:domain")
+include(":core:navigation")
 include(":core:data")
 include(":ar:arcore")

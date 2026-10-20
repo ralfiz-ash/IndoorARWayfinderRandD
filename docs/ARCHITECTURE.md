@@ -2,7 +2,8 @@
 
 ```
 app (Compose UI, ViewModels, AppContainer)
- ├── core:data   (Room)          ──┐
+ ├── core:navigation (routes)    ──┐
+ ├── core:data   (Room)          ──┤
  ├── ar:arcore   (ARCore, GL)    ──┼──> core:domain (pure Kotlin contracts + logic)
  └── core:domain                 ──┘
 ```
@@ -24,6 +25,14 @@ Rule: platform AR types stay in `:ar:arcore`. Everything crossing a module bound
 
 `:core:domain` is plain Kotlin/JVM, so it could alternatively become a Kotlin Multiplatform module
 shared with iOS; the native-Swift path only needs the table above and the unit tests as a spec.
+
+## Navigation (`:core:navigation`)
+Pure Kotlin, depends only on `:core:domain`. `RouteGraph` (validated), `VenueGraphJson` (developer
+file format, decodable with Swift `Codable`), `RoutePlanner` (Dijkstra plus bounded edge attachment),
+`TurnGenerator`, `RouteProgressCalculator`, and `NavigationSession`, a state machine that consumes
+`LocalizationStatus` and the camera position in session coordinates. Details are in
+[ROUTE_GRAPH.md](ROUTE_GRAPH.md). The venue graph is a bundled asset rather than a Room table:
+it is developer configuration, not user data.
 
 ## ARCore adapter (`:ar:arcore`)
 - `ArSessionController`: owns `Session`, configures it (augmented image DB, horizontal planes,
